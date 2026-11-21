@@ -109,7 +109,7 @@ export function buildHouse(W) {
 
   // ---------- doors ----------
   W.doorsByName = {};
-  const named = (n, d) => (W.doorsByName[n] = d);
+  const named = (n, d) => { d.name = n; return (W.doorsByName[n] = d); };
   named('masterBath', Dp('x', 150, 182, 205, 1));
   named('masterCloset', Dp('x', 214, 244, 205, 1));
   named('nursery', Dp('z', 455, 487, 198, 1));
@@ -118,7 +118,8 @@ export function buildHouse(W) {
   named('boys', Dp('x', 214, 247, 683, 1));
   named('utilityTop', Dp('x', 438, 476, 385, 1));
   named('utilityGarage', Dp('x', 428, 462, 508, 1));
-  named('basement', Dp('x', 440, 480, 325, 1, {
+  // opens into the stairwell (hinge on the dining side) so the open leaf never blocks the stair hall
+  named('basement', Dp('x', 440, 480, 325, -1, { hingeAtEnd: true,
     locked: true, keyId: 'basementKey', lockedText: 'Locked. The handle barely moves.', mat: m.darkWood,
   }));
   named('front', Dp('x', 273, 311, 680, 1, {
@@ -160,13 +161,15 @@ function furnish(W) {
 
   // Master bedroom
   put(P.bed(1.6, 2.0), 135, 265, HALF);
-  put(P.nightstand(), 98, 222, HALF);
+  W.spots.nightstand = put(P.nightstand(), 98, 222, HALF);
   put(P.nightstand(), 98, 308, HALF);
-  put(P.dresser(1.3), 245, 250, -HALF);
+  put(P.dresser(1.3), 245, 292, -HALF);
   put(P.armchair(), 195, 300, -Math.PI / 2);
   // Master closet
   put(P.shelf(1.6, 2.1, 0.45), 224, 92, 0);
-  put(P.wardrobe(0.9), 247, 150, -HALF);
+  W.spots.hide = [];
+  const hideAt = (name, g) => W.spots.hide.push({ name, group: g });
+  hideAt('closet wardrobe', put(P.wardrobe(0.9), 247, 150, -HALF));
   W.spots.closetDrawer = put(P.dresser(0.9), 205, 175, HALF);
   // Master bath
   put(P.bathtub(), 98, 140, 0);
@@ -176,7 +179,8 @@ function furnish(W) {
   put(P.crib(), 105, 380, 0);
   put(P.dresser(1.0), 92, 460, HALF);
   put(P.toys(), 150, 420, 0.4, false);
-  put(P.chair(), 170, 350, 2.4);
+  put(P.chair(), 150, 345, 2.4);
+  hideAt('nursery wardrobe', put(P.wardrobe(1.1), 187, 400, -HALF));
   // Living room
   put(P.sofa(2.4), 330, 285, Math.PI);
   put(P.armchair(), 395, 250, -HALF + 0.3);
@@ -209,12 +213,14 @@ function furnish(W) {
   put(P.sink(), 150, 675, Math.PI);
   // Boys' bedroom
   put(P.bed(1.0, 1.9, m.fabricBlue), 115, 760, HALF);
-  put(P.wardrobe(1.0), 245, 765, -HALF);
+  hideAt("boys' wardrobe", put(P.wardrobe(1.0), 245, 765, -HALF));
   put(P.table(1.1, 0.6), 175, 793, Math.PI);
   put(P.chair(), 175, 770, Math.PI);
   // Garage
   put(P.car(), 520, 660, 0);
   put(P.workbench(), 640, 600, -HALF);
+  hideAt('garage cupboard', put(P.wardrobe(1.0), 367, 610, HALF));
+  W.spots.garageMapWall = { x: px(657) - 0.09, y: 1.5, z: pz(538) };
   put(P.shelf(2.2, 2.2, 0.5), 400, 790, Math.PI);
   put(P.boxes(4, 5), 380, 540, 0);
   put(P.boxes(3, 9), 630, 790, 0);

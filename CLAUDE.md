@@ -928,3 +928,27 @@ When first entering the project:
 10. Never convert proposed or undecided story material into permanent canon without user approval.
 
 **Overall goal:** Deliver a complete, continuous, atmospheric first-person horror game in which a kidnapped child explores an isolated mansion, feels persistently watched, evades a human kidnapper, uncovers clues, escapes through the grounds into a dark straight sewer, survives a final chase and reaches a blackout ending with three gunshots followed by a cinematic revelation of the antagonist's identity and previous victims.
+
+---
+
+# 17. DECISIONS ADDED DURING DEVELOPMENT
+
+## 17.1 Antagonist — CONFIRMED (user, development update 2)
+
+- Name: **Chris Charles**. Age 36. Height 175 cm. Muscular build. Male.
+- He was severely abused as a child. As an adult he became obsessed with children he saw as genuinely happy. He kidnapped and murdered them, dismembered them in the basement and left their remains in different places.
+- His name and face must never be shown during play. The final cinematic reveals his identity.
+- Tell the backstory mainly through environmental storytelling: the map (red circles for where children were taken, red X marks for where remains were left), the basement cleaver and drain, the cage, the photographs, notes, and the old case letter.
+
+## 17.2 PROVISIONAL (implemented, awaiting user confirmation)
+
+- Number of victims: 6. Town and place names on the map are fictional and invented.
+- Exact wording of every clue and ending card (`src/data/story.js`). No victim is named.
+- He comes home about 6 s after the child leaves the basement.
+- Four hiding places: the closet wardrobe, the nursery wardrobe, the boys' wardrobe and the garage cupboard.
+
+## 17.3 Technical notes
+
+- Doors use oriented segment colliders that follow the leaf at every angle. Closing stops if a body is in the way. Opening pushes bodies aside.
+- The basement door opens into the stairwell, so the open leaf never blocks the stair hall.
+- The navigation grid is generated from collision data. Any change to walls, doors or furniture is picked up automatically, but check that rooms stay connected with `tests/ai.py patrol_connectivity`.

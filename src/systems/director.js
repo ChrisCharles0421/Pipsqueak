@@ -112,7 +112,7 @@ export class Director {
       if (this.visited.has('Nursery') && room !== 'Nursery' && room !== 'Foyer' && nd) {
         const pos = nd.leaf.getWorldPosition(new THREE.Vector3());
         if (pos.distanceTo(p) > 8 && !this.looking(pos, 1.0)) {
-          this.fire('nurseryDoor', () => { nd.setOpen(!nd.open, true); W.audio?.creak(pos, 0.03); });
+          this.fire('nurseryDoor', () => { nd.setOpen(!nd.open, { silent: true, by: 'director' }); W.audio?.creak(pos, 0.03); });
         }
       }
       // footsteps beyond a wall

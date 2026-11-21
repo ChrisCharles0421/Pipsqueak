@@ -156,6 +156,22 @@ export class Audio {
     this.tone({ f0: 55, f1: 50, dur: 2.5, gain, type: 'sawtooth', wet: 0.6 });
     this.tone({ f0: 58.3, f1: 52, dur: 2.5, gain: gain * 0.8, type: 'sawtooth', wet: 0.6 });
   }
+  buzz(pos, dur = 3) {
+    if (!this.enabled) return;
+    const c = this.ctx, t = c.currentTime;
+    const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 100;
+    const g = c.createGain(); g.gain.setValueAtTime(0, t);
+    for (let k = 0; k < dur * 12; k++) g.gain.setValueAtTime(Math.random() < 0.6 ? 0.05 + Math.random() * 0.05 : 0, t + k / 12);
+    g.gain.setValueAtTime(0, t + dur);
+    const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 2;
+    o.connect(f).connect(g).connect(this.out(pos, 0.3));
+    o.start(t); o.stop(t + dur + 0.1);
+    for (let k = 0; k < 8; k++) setTimeout(() => this.noiseHit({ pos, freq: 3000, q: 4, dur: 0.03, gain: 0.12 }), Math.random() * dur * 1000);
+  }
+  pop(pos) {
+    this.noiseHit({ pos, freq: 4000, q: 0.8, dur: 0.25, gain: 0.5, type: 'highpass', wet: 0.6, attack: 0.001 });
+    this.noiseHit({ pos, freq: 6000, q: 2, dur: 0.6, gain: 0.15, wet: 0.5 });
+  }
   grab() {
     this.noiseHit({ freq: 300, q: 0.5, dur: 0.4, gain: 0.8, type: 'lowpass', wet: 0.3 });
     this.sting(0.25);

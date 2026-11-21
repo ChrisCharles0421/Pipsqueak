@@ -33,11 +33,23 @@ The build uses a relative base path (`./`), so `dist/` works from any GitHub Pag
 
 ## Route (current progression)
 
-1. **Basement:** flashlight on the workbench. Key in the enclosed storage room (south-east). Unlock the door at the top of the stairs.
-2. **House:** front door is deadbolted. In the master closet, the dresser drawers hold a key ring and the revolver (picked up automatically, never usable as a weapon). The keys open the garage side door.
-3. **Grounds:** front gate is chained. Crowbar in the shed (north-east). Drainage grate in the retaining wall at the back of the garden.
-4. **Sewer:** the occupant follows. Sprint. Being caught restarts at the tunnel mouth.
-5. **End:** dead end, blackout, three gunshots, final cinematic (placeholder text).
+1. **Basement:** at first it's lit by one fluorescent tube. The flashlight is on the table under the tube. A few seconds after you take it, the tube flickers and dies. The stair door is locked. The clipboard on the workbench says spare keys are in the red toolbox in the store room. Use that key on the door.
+2. **House:** the occupant arrives about 6 s after you leave the basement and starts hunting (see AI below). The front door is deadbolted. The master closet dresser holds the key ring and the revolver. The garage side door leads outside. The map is pinned on the garage wall.
+3. **Grounds:** the front gate is chained. The crowbar is in the shed. The drainage grate is behind the garden.
+4. **Sewer:** the occupant follows you in (the same character, now under scripted control). Sprint. If he catches you, you restart at the tunnel mouth.
+5. **End:** blackout, three gunshots, then the final cinematic, which names Chris Charles and shows his map.
+
+## The occupant
+
+- **Profile:** `src/data/story.js` → `ANTAGONIST` (Chris Charles, 36, 175 cm, muscular). His name appears only in the final cinematic.
+- **Model:** `src/world/figure.js`. 1.75 m, broad build, work jacket, cap and beard. No facial features are modelled, and the cap brim keeps the face in shadow.
+- **AI:** `src/systems/antagonist.js`. States: PATROL, INVESTIGATE, SEARCH, PURSUE, LOST and SCRIPTED.
+  - **Vision:** range, field of view, raycast line of sight. Walls, closed doors and furniture block it. The flashlight and movement make you easier to see; crouching makes you harder to see.
+  - **Hearing:** event-driven noise from footsteps, doors, rattles, drawers, wardrobes and glass. Walls muffle it. He hears roughly where a sound came from, not the exact spot.
+  - **Memory:** last seen position and velocity, plus recent sounds. Search time runs out.
+  - **Hiding places:** 4 wardrobes or cupboards (`[E] Hide`). If he saw you get in, he opens that one. Otherwise he may check nearby hiding places while searching.
+- **Navigation:** `src/systems/nav.js`. A 0.2 m grid built automatically from the collision world, with two layers (ground floor + grounds, and basement) joined at the stairs. Uses A* with path smoothing. Doors are dynamic: he opens closed doors, cannot pass locked ones, and re-plans if blocked.
+- **Tuning:** every number is in `src/data/antagonist.js`.
 
 ## Layout
 
@@ -50,7 +62,10 @@ The build uses a relative base path (`./`), so `dist/` works from any GitHub Pag
 
 ## Debug / testing
 
-Open `/?debug` to skip pointer lock and expose `window.__game` (`teleport`, `state`, `give`, `look`, `hold`, `press`, `topDown`).
+Open `/?debug` to skip pointer lock and expose `window.__game` (`teleport`, `state`, `give`, `look`, `hold`, `press`, `simulate`, `topDown`).
+
+Automated tests (Playwright + Chrome, with the dev server running on :5173) live in `tests/`:
+`doors.py` (every door: closed blocks walk/sprint from both sides, open passes, closing stops on the child, interaction targets the leaf), `ai.py` (patrol, sight, walls, hearing, crouching, catch, doors, lost/search, hiding, connectivity, outdoor pursuit, basement), `walk.py` (end-to-end progression), `flash_wall.py`, `basement_light.py`.
 
 ## Deploying to GitHub Pages
 
@@ -59,6 +74,6 @@ Push the repo, then in **Settings → Pages** set the source to **GitHub Actions
 
 ## Known gaps
 
-- The occupant has no AI inside the house yet (no patrol, hearing, sight or hiding). In the house he appears only as scripted sightings. Noise events are already emitted (`W.noise`) for the AI to use.
-- All story text is placeholder.
+- Story details marked PROVISIONAL in `src/data/story.js` (victim count, fictional place names, clue wording) are not confirmed.
+- No voice or sound files: all audio is procedural.
 - Draw calls are high (about 1,000–1,600 per frame) because props are built from many small meshes. Merging static geometry is the next optimisation if frame rate is low.

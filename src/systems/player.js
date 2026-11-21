@@ -98,9 +98,10 @@ export class Player {
     const steps = Math.max(1, Math.ceil(dist / 0.1));
     const before = this.pos.clone();
     for (let i = 0; i < steps; i++) {
+      const prev = this.pos.clone();
       this.pos.x += (this.vel.x * dt) / steps;
       this.pos.z += (this.vel.z * dt) / steps;
-      W.col.resolveCircle(this.pos, PLAYER.radius, this.pos.y, h);
+      W.col.resolveCircle(this.pos, PLAYER.radius, this.pos.y, h, 0.3, prev);
     }
     // vertical: snap to ground / fall
     const g = W.col.groundAt(this.pos.x, this.pos.z, this.pos.y, 0.45);

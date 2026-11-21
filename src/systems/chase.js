@@ -21,9 +21,8 @@ export class Chase {
     this.W = W;
     this.game = game;
     this.state = 'idle';
-    this.fig = makeFigure();
-    this.fig.visible = false;
-    W.scene.add(this.fig);
+    this.fig = game.ai ? game.ai.fig : makeFigure(); // the same man as the house AI
+    if (!game.ai) W.scene.add(this.fig);
     this.pos = new THREE.Vector3();
     this.t = 0;
     this.stepAcc = 0;
@@ -41,6 +40,7 @@ export class Chase {
 
   start() {
     const p = this.game.player.pos;
+    this.game.ai?.setScripted();          // house AI hands control of his body to this sequence
     this.state = 'run';
     this.done = false;
     this.speed = 0;

@@ -19,10 +19,12 @@
   </div>
 
   <div id="vignette"></div>
+  <div id="hidingOverlay" class="hidden"></div>
   <div id="fade"></div>
 
   <div id="reader" class="panel hidden">
     <h2 id="reader-title"></h2>
+    <img id="reader-image" class="hidden" alt="" />
     <p id="reader-body"></p>
     <div class="small">Press E or click to close</div>
   </div>
@@ -31,7 +33,7 @@
     <h2>Journal</h2>
     <h3>Carrying</h3>
     <ul id="journal-items"></ul>
-    <h3>Found</h3>
+    <h3>Found (click to read again)</h3>
     <ul id="journal-clues"></ul>
     <div class="small">Press J to close</div>
   </div>
@@ -60,6 +62,7 @@
   </div>
 
   <div id="ending" class="screen hidden">
+    <img id="ending-image" class="hidden" alt="" />
     <p id="ending-text"></p>
     <button id="again" class="hidden">Play again</button>
   </div>

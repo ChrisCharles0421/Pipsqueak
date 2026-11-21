@@ -75,6 +75,7 @@ if (DEBUG) {
     state() {
       const p = game.player.pos;
       return { x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2), zone: game.zone, room: game.room, objective: game.objective,
+        ai: game.ai.state, aiPos: [+game.ai.pos.x.toFixed(2), +game.ai.pos.y.toFixed(2), +game.ai.pos.z.toFixed(2)], aware: +game.ai.awareness.toFixed(2), hiding: !!game.hiding,
         chase: game.chase.state, gap: +(game.chase.pos.z - p.z).toFixed(2), state: game.state, inv: [...game.inventory.items], prompt: document.getElementById('prompt').textContent };
     },
     give(id) { game.inventory.add(id); if (id === 'flashlight') { game.player.hasFlash = true; game.player.setFlash(true); } },
@@ -89,6 +90,12 @@ if (DEBUG) {
       renderer.render(game.scene, cam);
       game.scene.remove(amb); game.scene.fog = fog;
       game.W.ceilings.forEach((c) => (c.visible = true));
+    },
+    // run the simulation synchronously (no rendering) for fast automated tests
+    simulate(seconds, dt = 1 / 30, each = null) {
+      const n = Math.round(seconds / dt);
+      for (let i = 0; i < n; i++) { game.update(dt, input); input.endFrame(); if (each && each(i * dt) === true) return i * dt; }
+      return seconds;
     },
     hold(code, on) { if (on) input.down.add(code); else input.down.delete(code); },
   };

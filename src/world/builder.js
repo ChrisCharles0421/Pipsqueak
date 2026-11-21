@@ -113,8 +113,8 @@ export function wall(W, x1, z1, x2, z2, { y0 = 0, h = WALL_H, t = WALL_T, mat, o
   const seg = (s0, s1, yb, yt, solid) => {
     if (s1 - s0 < 0.005 || yt - yb < 0.005) return;
     const mesh = alongX
-      ? box(W, s0, yb, c - t / 2, s1, yt, c + t / 2, material)
-      : box(W, c - t / 2, yb, s0, c + t / 2, yt, s1, material);
+      ? box(W, s0, yb, c - t / 2, s1, yt, c + t / 2, material, { cast: true })
+      : box(W, c - t / 2, yb, s0, c + t / 2, yt, s1, material, { cast: true });
     if (solid) {
       if (alongX) W.col.addBox(s0, yb, c - t / 2, s1, yt, c + t / 2);
       else W.col.addBox(c - t / 2, yb, s0, c + t / 2, yt, s1);
@@ -190,8 +190,13 @@ function frame(W, alongX, c, s0, s1, yb, yt, t) {
 /*
  * Hinged door. axis: 'x' (door sits in a wall running along X) or 'z'.
  * from/to: span along the axis; at: wall coordinate; swing: +1/-1 side it opens towards.
+ *
+ * Collision: an oriented segment collider from the hinge to the leaf tip, updated every animation
+ * step, so it always matches the visible leaf (closed, opening, open, closing). It is never disabled.
+ * If the next animation step would sweep into the player or the occupant, the door stops (it bumps)
+ * instead of pushing them through.
  */
-export function door(W, { axis, from, to, at, y0 = 0, swing = 1, locked = false, keyId = null, name = 'door', lockedText = null, mat = null, onOpen = null, height = DOOR_H }) {
+export function door(W, { axis, from, to, at, y0 = 0, swing = 1, locked = false, keyId = null, name = 'door', lockedText = null, mat = null, onOpen = null, height = DOOR_H, aiLocked = false, hingeAtEnd = false }) {
   const m = mats();
   const width = to - from;
   const pivot = new THREE.Group();
@@ -204,56 +209,95 @@ export function door(W, { axis, from, to, at, y0 = 0, swing = 1, locked = false,
   const knob2 = knob.clone(); knob2.position.z = -0.05;
   pivot.add(knob, knob2);
 
-  let base;
-  if (axis === 'x') { pivot.position.set(from, y0, at); base = 0; }
-  else { pivot.position.set(at, y0, from); base = -Math.PI / 2; }
-  const openAngle = axis === 'x' ? base + (swing > 0 ? -Math.PI / 2 : Math.PI / 2) * 0.92
-    : base + (swing > 0 ? Math.PI / 2 : -Math.PI / 2) * 0.92;
+  // hinge at the 'from' end (default) or the 'to' end; the leaf points from the hinge along the wall
+  let base, hx, hz;
+  if (axis === 'x') { hx = hingeAtEnd ? to : from; hz = at; base = hingeAtEnd ? Math.PI : 0; }
+  else { hx = at; hz = hingeAtEnd ? to : from; base = hingeAtEnd ? Math.PI / 2 : -Math.PI / 2; }
+  pivot.position.set(hx, y0, hz);
+  // open towards the requested side: pick the rotation whose tip ends up on that side of the wall
+  const tipSide = (a) => (axis === 'x' ? -Math.sin(a) : Math.cos(a));
+  const openAngle = [base + Math.PI / 2 * 0.92, base - Math.PI / 2 * 0.92].find((a) => Math.sign(tipSide(a)) === Math.sign(swing));
   pivot.rotation.y = base;
   W.scene.add(pivot);
 
-  const colBox = W.col.addBox(0, 0, 0, 0, 0, 0, 'door');
-  W.col.updateBoxFromObject(colBox, leaf, 0);
-  // keep a door at full wall thickness when closed so it seals the gap
+  const reach = width - 0.01;
+  const seg = W.col.addSeg(0, 0, 0, 0, 0.045, y0, y0 + height, 'door');
+  const place = (ang) => {
+    // leaf local +X rotated by ang about Y: (cos a, -sin a)
+    seg.ax = hx; seg.az = hz;
+    seg.bx = hx + Math.cos(ang) * reach;
+    seg.bz = hz - Math.sin(ang) * reach;
+  };
+  place(base);
+
   const d = {
-    name, pivot, leaf, colBox, open: false, locked, keyId, lockedText,
-    angle: base, target: base, base, openAngle, animating: false, onOpen,
-    setOpen(v, silent = false) {
+    name, pivot, leaf, seg, open: false, locked, keyId, lockedText, aiLocked,
+    angle: base, target: base, base, openAngle, animating: false, onOpen, blockedT: 0,
+    hinge: { x: hx, z: hz }, axis, from, to, at, y0, width,
+    center: axis === 'x' ? { x: (from + to) / 2, z: at } : { x: at, z: (from + to) / 2 },
+    // fraction open, 0 closed .. 1 fully open
+    openness() { return (this.angle - this.base) / (this.openAngle - this.base); },
+    isOpenEnough() { return this.openness() > 0.75; },
+    setOpen(v, { silent = false, by = 'player' } = {}) {
+      if (this.locked && v) return false;
       this.open = v;
       this.target = v ? this.openAngle : this.base;
       this.animating = true;
-      this.colBox.enabled = false;
-      if (!silent) W.audio?.door(v, this.leaf.getWorldPosition(new THREE.Vector3()));
+      this.blockedT = 0;
+      if (!silent) {
+        const p = this.leaf.getWorldPosition(new THREE.Vector3());
+        W.audio?.door(v, p);
+        if (by === 'player') W.noise?.(p, 6.5, 'door');
+      }
       if (v && this.onOpen) { const f = this.onOpen; this.onOpen = null; f(); }
+      return true;
+    },
+    // true if the leaf at angle `ang` would overlap a moving body (player / occupant)
+    sweepBlocked(ang) {
+      const save = [seg.bx, seg.bz];
+      place(ang);
+      let hit = false;
+      for (const b of W.bodies || []) {
+        if (W.col.circleHitsSeg(seg, b.pos.x, b.pos.z, b.radius, b.pos.y, b.height)) { hit = true; break; }
+      }
+      seg.bx = save[0]; seg.bz = save[1];
+      return hit;
     },
     update(dt) {
       if (!this.animating) return;
-      const sp = 3.2 * dt;
+      const sp = 3.0 * dt;
       const diff = this.target - this.angle;
-      if (Math.abs(diff) <= sp) { this.angle = this.target; this.animating = false; }
-      else this.angle += Math.sign(diff) * sp;
-      this.pivot.rotation.y = this.angle;
-      if (!this.animating) {
-        W.col.updateBoxFromObject(this.colBox, this.leaf, 0.0);
-        this.colBox.enabled = true;
+      const next = Math.abs(diff) <= sp ? this.target : this.angle + Math.sign(diff) * sp;
+      const closing = Math.abs(next - this.base) < Math.abs(this.angle - this.base);
+      if (closing && this.sweepBlocked(next)) {
+        // someone is in the way: hold position; after a moment give up and stay where it is
+        this.blockedT += dt;
+        if (this.blockedT > 1.2) { this.animating = false; this.open = this.openness() > 0.5; this.target = this.angle; }
+        return;
       }
+      this.blockedT = 0;
+      this.angle = next;
+      if (this.angle === this.target) this.animating = false;
+      this.pivot.rotation.y = this.angle;
+      place(this.angle);
     },
   };
+  seg.ref = d;
   W.doors.push(d);
   W.interact.add(leaf, {
-    prompt: () => (d.open ? 'Close' : 'Open'),
+    prompt: () => (d.locked ? 'Open' : d.open ? 'Close' : 'Open'),
     use: () => {
       if (d.locked) {
         if (d.keyId && W.inventory.has(d.keyId)) {
           d.locked = false;
-          W.ui.toast(`Unlocked with the ${W.inventory.label(d.keyId)}.`);
+          W.ui.toast(`The ${W.inventory.label(d.keyId)} turns in the lock.`);
           W.audio?.unlock();
-          d.setOpen(true);
           W.events?.emit('doorUnlocked', d);
+          setTimeout(() => d.setOpen(true), 350);
         } else {
           W.audio?.rattle(d.leaf.getWorldPosition(new THREE.Vector3()));
           W.ui.toast(d.lockedText || 'Locked.');
-          W.noise?.(d.leaf.getWorldPosition(new THREE.Vector3()), 6);
+          W.noise?.(d.leaf.getWorldPosition(new THREE.Vector3()), 7, 'rattle');
           W.events?.emit('lockedDoor', d);
         }
         return;
