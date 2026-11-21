@@ -16,7 +16,10 @@ import { buildSewer, updateSewer, SEWER } from './world/sewer.js';
 import { px, pz, mats } from './world/builder.js';
 import { P, place } from './world/props.js';
 import { mapTexture, drawMap, paperTexture } from './world/evidence.js';
+import { animateFigure } from './world/figure.js';
+import { ViewModel } from './systems/viewmodel.js';
 import { OBJECTIVES, ITEMS, CLUES, ENDING } from './data/story.js';
+import { CREAKY_BOARDS_PX, CREAK, SPAWN_PX } from './data/antagonist.js';
 
 const ZONE_LOOK = {
   basementLit: { fog: 0x0a0c0e, density: 0.035, hemi: 0.3, flash: [9, 10] },
@@ -60,6 +63,7 @@ export class Game {
     buildSewer(W);
 
     this.player = new Player(W, camera);
+    this.viewModel = new ViewModel(this.player);
     W.bodies.push({ pos: this.player.pos, radius: 0.27, height: 1.45 });
 
     const t0 = performance.now();
@@ -75,6 +79,8 @@ export class Game {
     this.director = new Director(W, this);
     this.chase = new Chase(W, this);
     this.setupHiding();
+    this.setupCreakyBoards();
+    W.stepHook = (pos, mode) => this.floorCreak(pos, 'player', mode);
     this.placeItems();
     this.wireEvents();
 
@@ -228,6 +234,32 @@ export class Game {
     paperAt(26.0, 0.93, -13.3, 'shed', 0.2);
   }
 
+  // ---------------- loose floorboards ----------------
+  setupCreakyBoards() {
+    const worn = new THREE.MeshLambertMaterial({ map: mats().wood.map, color: 0x9a8670, transparent: true, opacity: 0.55, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 });
+    this.boards = CREAKY_BOARDS_PX.map(([room, x0, y0, x1, y1]) => {
+      const b = { room, x0: px(x0), z0: pz(y0), x1: px(x1), z1: pz(y1), t: -9 };
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(b.x1 - b.x0, b.z1 - b.z0), worn);
+      m.rotation.x = -Math.PI / 2; m.position.set((b.x0 + b.x1) / 2, 0.004, (b.z0 + b.z1) / 2);
+      this.scene.add(m);
+      return b;
+    });
+  }
+
+  // Called on every footstep (player and occupant). Returns true if a board creaked.
+  floorCreak(pos, who, mode = 'walk') {
+    if (pos.y < -0.5 || pos.y > 0.5) return false;
+    const b = this.boards?.find((q) => pos.x > q.x0 && pos.x < q.x1 && pos.z > q.z0 && pos.z < q.z1);
+    if (!b || this.time - b.t < CREAK.cooldown) return false;
+    if (who === 'player' && mode === 'crouch' && Math.random() > CREAK.crouchChance) return false;
+    b.t = this.time;
+    const p = { x: pos.x + (Math.random() - 0.5) * 0.3, y: 0.05, z: pos.z + (Math.random() - 0.5) * 0.3 };
+    this.audio.creak(p, who === 'occupant' ? 0.06 : mode === 'crouch' ? 0.035 : 0.055, { key: 'floorboard' });
+    if (who === 'player') this.noise(new THREE.Vector3(pos.x, pos.y, pos.z), CREAK.noiseRadius[mode] ?? 8, 'creak');
+    this.emit('creak', { who, board: b.room });
+    return true;
+  }
+
   // ---------------- basement tube light ----------------
   scheduleTubeFailure() {
     if (this.flags.tubeScheduled) return;
@@ -253,61 +285,139 @@ export class Game {
         this.audio.pop?.(tube.mesh.position);
         this.noise(tube.mesh.position, 8, 'glass');
         this.ui.toast('The light dies. Use the flashlight. [F]', 4);
-        if (!this.player.flashOn) this.ui.hint('F: flashlight');
+        if (!this.player.equipped) this.ui.hint('F: flashlight');
       }
     }
   }
 
-  // ---------------- hiding ----------------
+  // ---------------- hiding (cupboards + under tables) ----------------
+  // Hidden = safe: the occupant cannot see, hear or catch the child while hidden (see Antagonist).
   setupHiding() {
-    this.hidingSpots = (this.W.spots.hide || []).map((h) => {
-      const g = h.group;
-      const ry = g.rotation.y;
+    const W = this.W;
+    const spots = [];
+    for (const h of W.spots.hide || []) {
+      const g = h.group, ry = g.rotation.y;
       const fwd = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
-      const spot = {
-        name: h.name, group: g, yaw: Math.atan2(-fwd.x, -fwd.z),
-        pos: g.position.clone(),
-        front: g.position.clone().addScaledVector(fwd, 0.85),
-      };
-      this.W.interact.add(g, { prompt: () => 'Hide', use: () => this.hide(spot), enabled: () => !this.hiding });
-      return spot;
-    });
+      const front = g.position.clone().addScaledVector(fwd, 0.85);
+      spots.push({
+        type: 'cupboard', name: h.name, group: g, pos: g.position.clone(), front, exits: [front],
+        eyeY: 1.2, faceYaw: Math.atan2(-fwd.x, -fwd.z), lookRange: 0.5, prompt: 'Hide in the cupboard',
+      });
+    }
+    this.rejectedTables = [];
+    for (const t of W.spots.tables || []) {
+      const spot = this.tableSpot(t);
+      if (spot) spots.push(spot); else this.rejectedTables.push(t.name);
+    }
+    this.hidingSpots = spots;
+    for (const sp of spots) W.interact.add(sp.group, { prompt: () => sp.prompt, use: () => this.hide(sp), enabled: () => !this.hiding });
+  }
+
+  // A table is a valid hiding place only if it is tall and big enough, nothing else occupies the space
+  // underneath, and the child can get in/out from at least one side.
+  tableSpot(t) {
+    const W = this.W, g = t.group;
+    if (t.h < 0.68 || Math.min(t.w, t.l) < 0.55 || Math.max(t.w, t.l) < 0.9) return null;
+    const ry = g.rotation.y, c = g.position;
+    const ax = new THREE.Vector3(Math.cos(ry), 0, -Math.sin(ry)), az = new THREE.Vector3(Math.sin(ry), 0, Math.cos(ry));
+    const own = g.userData.col;
+    // underneath must be clear of every other obstacle
+    const under = { x: c.x, z: c.z };
+    const halfMin = Math.min(t.w, t.l) / 2 - 0.08;
+    for (const b of W.col.boxes) {
+      if (!b.enabled || b === own || b.max.y <= c.y + 0.05 || b.min.y >= c.y + t.h - 0.1) continue;
+      const cx = Math.max(b.min.x, Math.min(under.x, b.max.x)), cz = Math.max(b.min.z, Math.min(under.z, b.max.z));
+      if (Math.hypot(under.x - cx, under.z - cz) < halfMin) return null;
+    }
+    // exits: just outside each side, where a standing child fits
+    const exits = [];
+    for (const [dir, half] of [[ax, t.w / 2], [ax.clone().negate(), t.w / 2], [az, t.l / 2], [az.clone().negate(), t.l / 2]]) {
+      const p = c.clone().addScaledVector(dir, half + 0.4); p.y = c.y;
+      const q = p.clone();
+      W.col.resolveCircle(q, 0.27, p.y, 1.45);
+      const ground = W.col.groundAt(q.x, q.z, p.y + 0.1);
+      if (q.distanceTo(p) < 0.05 && Math.abs(ground.y - c.y) < 0.2) exits.push(p);
+    }
+    if (!exits.length) return null;
+    return {
+      type: 'table', name: t.name, group: g, pos: c.clone(), front: exits[0], exits,
+      eyeY: 0.42, faceYaw: null, lookRange: 1.3, prompt: 'Hide under the table',
+    };
   }
 
   hide(spot) {
-    if (this.hiding) return;
+    if (this.hiding || this.state !== 'play') return;
     const pl = this.player;
-    this.hiding = { spot, from: pl.pos.clone() };
+    const from = { pos: this.camera.position.clone(), yaw: pl.yaw, pitch: pl.pitch };
+    // look out from under a table towards where the child came from
+    const yaw = spot.faceYaw ?? Math.atan2(-(from.pos.x - spot.pos.x), -(from.pos.z - spot.pos.z)) + Math.PI;
+    this.hiding = { spot, phase: 'enter', t: 0, from, baseYaw: yaw, look: 0, pitch: 0, entry: pl.pos.clone() };
     this.hideStartT = this.time;
-    pl.frozen = true;
-    pl.vel.set(0, 0, 0);
-    this.audio.creak(spot.pos, 0.06);
-    this.noise(spot.pos, 2.5, 'wardrobe');
-    this.ui.show('hidingOverlay', true);
-    this.ui.hint('Hiding. [E] to come out.');
+    pl.frozen = true; pl.vel.set(0, 0, 0); pl.crouching = false;
+    if (spot.type === 'cupboard') this.audio.creak(spot.pos, 0.05, { len: 0.6, key: 'hideCreak' });
+    this.noise(spot.pos, 2.5, 'hide');   // the act of getting in can be heard if he is very close
     this.ai.onChildHid(spot);
+    this.ui.setPrompt('');
     this.emit('hid', spot);
   }
 
   unhide() {
-    const h = this.hiding; if (!h) return;
-    this.hiding = null;
-    const f = h.spot.front;
-    this.player.spawn(f.x, this.player.pos.y, f.z, h.spot.yaw);
-    this.player.frozen = false;
-    this.audio.creak(h.spot.pos, 0.06);
-    this.noise(h.spot.pos, 3, 'wardrobe');
+    const h = this.hiding; if (!h || h.phase !== 'hidden') return;
+    const sp = h.spot;
+    // leave on the side nearest to where the child is looking (tables), else the cupboard front
+    let exit = sp.exits[0];
+    if (sp.type === 'table') {
+      const look = h.baseYaw + h.look, dir = new THREE.Vector3(-Math.sin(look), 0, -Math.cos(look));
+      exit = sp.exits.slice().sort((a, b) => b.clone().sub(sp.pos).normalize().dot(dir) - a.clone().sub(sp.pos).normalize().dot(dir))[0];
+    }
+    h.phase = 'exit'; h.t = 0; h.exit = exit;
+    h.fromCam = this.camera.position.clone();
+    if (sp.type === 'cupboard') this.audio.creak(sp.pos, 0.05, { len: 0.5, key: 'hideCreak' });
     this.ui.show('hidingOverlay', false);
     this.ui.hint('');
   }
 
-  updateHidingCamera(dt, input) {
-    const h = this.hiding, pl = this.player, sp = h.spot;
-    pl.pos.set(sp.pos.x, pl.pos.y, sp.pos.z);
-    h.look = Math.max(-0.5, Math.min(0.5, (h.look || 0) - input.mouseDX * input.sensitivity));
-    h.pitch = Math.max(-0.4, Math.min(0.4, (h.pitch || 0) - input.mouseDY * input.sensitivity));
-    this.camera.position.set(sp.pos.x, pl.pos.y + 1.2, sp.pos.z);
-    this.camera.rotation.set(h.pitch, sp.yaw + h.look, 0, 'YXZ');
+  // smooth camera transitions in and out; low, limited look-around while hidden
+  updateHiding(dt, input) {
+    const h = this.hiding, pl = this.player, sp = h.spot, cam = this.camera;
+    const ease = (t) => t * t * (3 - 2 * t);
+    const hidePos = new THREE.Vector3(sp.pos.x, sp.pos.y + sp.eyeY, sp.pos.z);
+    if (h.phase === 'enter') {
+      h.t = Math.min(1, h.t + dt / 0.6);
+      const e = ease(h.t);
+      cam.position.lerpVectors(h.from.pos, hidePos, e);
+      const dy = ((h.baseYaw - h.from.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      cam.rotation.set(h.from.pitch * (1 - e), h.from.yaw + dy * e, 0, 'YXZ');
+      if (h.t >= 1) {
+        h.phase = 'hidden';
+        pl.pos.set(sp.pos.x, sp.pos.y, sp.pos.z);
+        if (sp.type === 'cupboard') this.ui.show('hidingOverlay', true);
+        this.ui.hint(sp.type === 'cupboard' ? 'Hiding in the cupboard. [E] to come out.' : 'Hiding under the table. [E] to come out.');
+      }
+      return;
+    }
+    if (h.phase === 'hidden') {
+      h.look = Math.max(-sp.lookRange, Math.min(sp.lookRange, h.look - input.mouseDX * input.sensitivity));
+      h.pitch = Math.max(-0.35, Math.min(sp.type === 'table' ? 0.12 : 0.4, h.pitch - input.mouseDY * input.sensitivity));
+      cam.position.copy(hidePos);
+      cam.rotation.set(h.pitch, h.baseYaw + h.look, 0, 'YXZ');
+      if (input.was('interact') && this.time - this.hideStartT > 0.7) this.unhide();
+      return;
+    }
+    if (h.phase === 'exit') {
+      h.t = Math.min(1, h.t + dt / 0.5);
+      const e = ease(h.t);
+      const standPos = new THREE.Vector3(h.exit.x, h.exit.y + 1.33, h.exit.z);
+      cam.position.lerpVectors(h.fromCam, standPos, e);
+      if (h.t >= 1) {
+        const yaw = h.baseYaw + h.look;
+        pl.spawn(h.exit.x, h.exit.y, h.exit.z, yaw);
+        pl.frozen = false;
+        this.noise(sp.pos, 3, 'hide');
+        this.hiding = null;
+        this.emit('unhid', sp);
+      }
+    }
   }
 
   wireEvents() {
@@ -326,7 +436,7 @@ export class Game {
         // he comes home a little after the child gets out of the basement
         setTimeout(() => {
           this.audio.knock?.(new THREE.Vector3(px(600), 1, pz(720)));
-          this.ai.activate(px(520), pz(560));
+          this.ai.activate(px(SPAWN_PX[0]), pz(SPAWN_PX[1]));
           this.ui.toast('A door slams somewhere in the house.', 3.5);
         }, 6000);
       }
@@ -364,7 +474,6 @@ export class Game {
       this.audio.setZone(zone);
       const L = this.lookFor(zone);
       this.player.flashProfile = { intensity: L.flash[0], distance: L.flash[1] };
-      if (this.player.flashOn) this.player.setFlash(true);
       if (zone === 'sewer' && !this.flags.sewerCheckpoint) {
         this.flags.sewerCheckpoint = true;
         this.setCheckpoint(SEWER.x, SEWER.floorY, -26.6, 0);
@@ -376,40 +485,87 @@ export class Game {
   lookFor(zone) { return zone === 'basement' && !this.flags.tubeBroken ? ZONE_LOOK.basementLit : ZONE_LOOK[zone]; }
 
   // ---------------- failure / retry ----------------
+  // Caught: dedicated capture state -> jumpscare with his real model -> game-over screen. Runs once.
   caught(text = 'He caught you.') {
-    if (this.state !== 'play') return;
+    if (this.state !== 'play' || this.jump) return;
+    if (this.hiding) return;                       // hidden children are never caught
     const pl = this.player;
-    pl.frozen = true;
-    this.audio.grab();
-    this.ui.fade(1, 0.25);
-    this.ui.hint('');
     this.state = 'dying';
+    pl.frozen = true; pl.vel.set(0, 0, 0); pl.lookBack = 0;
+    this.ai.capture = true;
+    this.ui.setPrompt(''); this.ui.hint(''); this.ui.toast('', 0.01);
     this.ui.el.deathText.textContent = text;
-    setTimeout(() => {
-      if (this.state !== 'dying') return;
+    const fig = this.ai.fig;
+    fig.visible = true;
+    // where he really is (the chase or the house AI), not where his model was last drawn
+    const src = this.chase.state !== 'idle' ? this.chase.pos : this.ai.pos;
+    // put him right in front of the camera, coming from the side he caught the child from
+    const cam = this.camera.position.clone();
+    const dir = new THREE.Vector3(src.x - cam.x, 0, src.z - cam.z);
+    if (dir.lengthSq() < 0.01) dir.set(-Math.sin(pl.yaw), 0, -Math.cos(pl.yaw));
+    dir.normalize();
+    this.jump = { t: 0, dir, startYaw: pl.yaw, startPitch: pl.pitch, targetYaw: Math.atan2(-dir.x, -dir.z), feetY: pl.pos.y, shown: false };
+    this.audio.grab();
+    this.audio.setBreath(cam, 1.2, 2.2);
+    pl.equipped = false;                           // the child drops the light: he is seen in silhouette
+    this.ui.el.hud.style.visibility = 'hidden';
+    this.input?.unlock();
+  }
+
+  updateJumpscare(dt) {
+    const J = this.jump, cam = this.camera, fig = this.ai.fig, pl = this.player;
+    J.t += dt;
+    const t = J.t;
+    const eye = new THREE.Vector3(pl.pos.x, pl.pos.y + pl.eye, pl.pos.z);
+    // camera snaps round to him (0.12 s), then shakes
+    const k = Math.min(1, t / 0.12);
+    const dy = ((J.targetYaw - J.startYaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+    const shake = t > 0.1 && t < 0.95 ? (0.95 - t) * 0.045 : 0;
+    cam.position.set(eye.x + (Math.random() - 0.5) * shake, eye.y + (Math.random() - 0.5) * shake, eye.z + (Math.random() - 0.5) * shake);
+    // frame his head and shoulders against the light behind him; the face stays in shadow under the brim
+    cam.rotation.set(J.startPitch * (1 - k) + 0.24 * k, J.startYaw + dy * k, (Math.random() - 0.5) * shake * 2, 'YXZ');
+    // he lunges from ~1.4 m to ~0.8 m, arms coming up
+    const lunge = Math.min(1, Math.max(0, (t - 0.08) / 0.3));
+    const d = 1.4 - 0.6 * (lunge * lunge * (3 - 2 * lunge));
+    fig.position.set(eye.x + J.dir.x * d, J.feetY, eye.z + J.dir.z * d);
+    fig.rotation.y = Math.atan2(-J.dir.x, -J.dir.z);
+    animateFigure(fig, dt, lunge < 1 ? 3 : 0, 1);
+    // a dim cold light behind and above him: his outline reads, his face does not
+    const L = this.chase.back;
+    L.position.set(eye.x + J.dir.x * (d + 1.0), J.feetY + 2.1, eye.z + J.dir.z * (d + 1.0));
+    L.intensity = 6; L.distance = 4.5;
+    this.ui.el.jumpFlash.style.opacity = t < 0.5 ? String(0.55 * (1 - t / 0.5)) : '0';
+    if (t > 0.95 && !J.black) { J.black = true; this.ui.fade(1, 0.05); this.audio.noiseHit({ freq: 90, q: 0.7, dur: 0.6, gain: 0.7, type: 'lowpass', wet: 0.2 }); }
+    if (t > 1.7 && !J.shown) {
+      J.shown = true;
       this.state = 'dead';
+      L.intensity = 0;
+      this.audio.setBreath(cam.position, 0);
       this.ui.show('death', true);
-      this.audio.setBreath(this.chase.pos, 0);
-      this.input?.unlock();
-    }, 700);
+    }
   }
 
-  caughtByOccupant(text) {
-    if (this.hiding) { this.ui.show('hidingOverlay', false); this.hiding = null; }
-    this.caughtInHouse = true;
-    this.caught(text);
-  }
+  caughtByOccupant(text) { this.caught(text); }
 
+  // Retry from the last checkpoint: every player/AI/chase state involved in the capture is reset.
   retry() {
     this.ui.show('death', false);
+    this.jump = null;
+    this.ui.el.jumpFlash.style.opacity = '0';
+    this.chase.back.intensity = 0; this.chase.back.distance = 5;
+    if (this.hiding) { this.hiding = null; this.ui.show('hidingOverlay', false); }
     const c = this.checkpoint;
     this.player.spawn(c.x, c.y, c.z, c.yaw);
     this.player.frozen = false;
     this.player.lookBack = 0;
+    this.player.crouching = false;
+    this.ai.capture = false;
     if (this.chase.state !== 'idle' || this.zone === 'sewer') this.chase.reset();
     else if (this.ai.state !== 'DORMANT' && this.ai.state !== 'SCRIPTED') this.ai.respawnAwayFrom(this.player.pos);
-    this.caughtInHouse = false;
     this.ui.fade(0, 0.8);
+    this.ui.hint('');
+    this.ui.el.hud.style.visibility = 'visible';
+    if (this.player.hasFlash) this.player.setFlash(true);   // pick the light back up
     this.state = 'play';
     if (this.zone === 'sewer') this.setObjective('enter');
   }
@@ -432,9 +588,13 @@ export class Game {
     this.audio.stopAll();
     this.chase.fig.visible = false;
     const shots = [1400, 2250, 2950];
-    shots.forEach((t) => setTimeout(() => this.audio.gunshot(), t));
+    // exactly three shots, each fired once (guarded against repeated triggers)
     this.shotsFired = 0;
-    shots.forEach((t) => setTimeout(() => { this.shotsFired++; }, t + 10));
+    shots.forEach((t, i) => setTimeout(() => {
+      if (this.shotsFired !== i) return;
+      this.audio.gunshot(i);
+      this.shotsFired = i + 1;
+    }, t));
     setTimeout(() => this.playEnding(), 6500);
   }
 
@@ -461,25 +621,27 @@ export class Game {
   // ---------------- per-frame ----------------
   update(dt, input) {
     this.input = input;
-    if (this.state !== 'play' && this.state !== 'dying') return;
+    if (this.state === 'dying' && this.jump) { this.updateJumpscare(dt); this.viewModel.update(dt, null, this.hemi.intensity); return; }
+    if (this.state !== 'play') return;
     this.time += dt;
     const W = this.W, pl = this.player;
 
     if (this.hiding) {
-      if (input.was('interact') && this.time - this.hideStartT > 0.4) this.unhide();
-      else this.updateHidingCamera(dt, input);
+      this.updateHiding(dt, input);
     } else if (this.ui.readerOpen) {
       if (input.was('interact') || input.was('journal')) this.ui.closeReader();
       pl.frozen = true;
     } else if (this.ui.journalOpen) {
       if (input.was('journal')) this.ui.toggleJournal([], []);
       pl.frozen = true;
-    } else if (!this.turning && this.chase.state !== 'confront' && this.chase.state !== 'caught' && this.state === 'play') {
+    } else if (!this.turning && this.chase.state !== 'confront' && this.chase.state !== 'caught') {
       pl.frozen = false;
       if (input.was('journal')) this.ui.toggleJournal(this.inventory.list(), this.clues, (id) => this.readClue(id));
     }
 
     if (!this.hiding) pl.update(dt, input);
+    else pl.applyBeam();
+    this.viewModel.update(dt, input, this.hemi.intensity);
 
     if (this.turning) {
       const tr = this.turning;
@@ -494,7 +656,7 @@ export class Game {
 
     const it = pl.frozen ? null : W.interact.update(this.camera, W.col);
     const label = it ? it.prompt() : '';
-    this.ui.setPrompt(label);
+    if (!this.hiding) this.ui.setPrompt(label);
     if (it && label && input.was('interact') && !this.ui.readerOpen) it.use();
 
     for (const d of W.doors) d.update(dt);

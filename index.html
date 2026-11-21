@@ -19,6 +19,7 @@
   </div>
 
   <div id="vignette"></div>
+  <div id="jumpFlash"></div>
   <div id="hidingOverlay" class="hidden"></div>
   <div id="fade"></div>
 
@@ -57,8 +58,15 @@
   </div>
 
   <div id="death" class="screen hidden">
-    <h1 id="death-text">He caught you.</h1>
-    <button id="retry">Try again</button>
+    <div class="death-inner">
+      <h1>YOU WERE CAUGHT</h1>
+      <p id="death-text">He caught you.</p>
+      <div class="death-buttons">
+        <button id="retry">Try again</button>
+        <button id="restart-all" class="ghost">Restart from the beginning</button>
+      </div>
+      <div class="small">Tip: hide in cupboards or under tables. Crouch over loose floorboards.</div>
+    </div>
   </div>
 
   <div id="ending" class="screen hidden">

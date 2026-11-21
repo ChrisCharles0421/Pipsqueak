@@ -40,7 +40,9 @@ export class Player {
     this.flash.target.position.set(0, -0.2, -5);
     camera.add(this.flash.target);
     this.hasFlash = false;
-    this.flashOn = false;
+    this.equipped = false;   // flashlight in hand (F)
+    this.beamReady = false;  // set by the view model once the light is raised
+    this.flashOn = false;    // beam actually lit
     this.flashProfile = { intensity: 9, distance: 10 };
   }
 
@@ -52,11 +54,16 @@ export class Player {
     this.updateCamera(0);
   }
 
+  // Equip (raise) or put away the flashlight. The beam switches on once it is raised (see ViewModel).
   setFlash(on) {
-    this.flashOn = on && this.hasFlash;
+    this.equipped = on && this.hasFlash;
+    this.W.audio?.click();
+  }
+
+  applyBeam() {
+    this.flashOn = this.hasFlash && this.equipped && this.beamReady;
     this.flash.intensity = this.flashOn ? this.flashProfile.intensity : 0;
     this.flash.distance = this.flashProfile.distance;
-    this.W.audio?.click();
   }
 
   update(dt, input) {
@@ -127,15 +134,17 @@ export class Player {
     if (this.stepDist > stride) {
       this.stepDist = 0;
       const loud = this.sprinting ? 1.4 : this.crouching ? 0.35 : 0.8;
-      W.audio?.footstep(this.surface, loud);
-      W.noise?.(this.pos, this.sprinting ? 9 : this.crouching ? 1.5 : 4);
+      W.audio?.footstep(this.surface, loud, null, 'player');
+      W.noise?.(this.pos, this.sprinting ? 9 : this.crouching ? 1.5 : 4, 'footstep');
+      W.stepHook?.(this.pos, this.sprinting ? 'sprint' : this.crouching ? 'crouch' : 'walk');
     }
 
     // flashlight toggle
     if (!this.frozen && input.was('flashlight')) {
-      if (this.hasFlash) this.setFlash(!this.flashOn);
+      if (this.hasFlash) this.setFlash(!this.equipped);
       else W.ui.toast("You don't have a light.", 2);
     }
+    this.applyBeam();
     this.updateCamera(dt, moved / Math.max(dt, 1e-4));
   }
 

@@ -8,7 +8,7 @@
 // view and an unobstructed ray; hearing needs a noise event within (muffled) range. Memory holds the last
 // seen position/velocity and recent sounds; search confidence decays over time.
 import * as THREE from 'three';
-import { AI, PATROL_PX } from '../data/antagonist.js';
+import { AI, PATROL_PX, EXCLUSION, RECENT_ROOM_COOLDOWN } from '../data/antagonist.js';
 import { makeFigure, animateFigure } from '../world/figure.js';
 import { px, pz } from '../world/builder.js';
 
@@ -41,6 +41,9 @@ export class Antagonist {
     this.pause = 0; this.lookAround = 0; this.lookBase = 0;
     this.patrolPoints = PATROL_PX.map(([room, x, y]) => ({ room, x: px(x), y: 0, z: pz(y) }));
     this.recentPatrol = [];
+    this.roomVisitT = {};          // room -> game time of last patrol visit
+    this.zones = EXCLUSION.map((z) => ({ ...z, rect: z.px ? [px(z.px[0]), pz(z.px[1]), px(z.px[2]), pz(z.px[3])] : null, until: -1e9 }));
+    this.capture = false;          // frozen while the jumpscare plays
     this.search = null;
     this.checking = null;           // hiding spot being checked
     this.stepAcc = 0;
@@ -81,6 +84,8 @@ export class Antagonist {
     this.awareness = 0;
     this.memory.lastSeen = null; this.memory.sounds = [];
     this.graceT = this.cfg.graceAfterRespawn;
+    this.capture = false;
+    for (const z of this.zones) z.until = -1e9;
     this.fig.visible = true;
     this.state = null;
     this.setState(S.PATROL, 'respawn');
@@ -155,7 +160,14 @@ export class Antagonist {
     if (this.W.col.rayBlockDistance(ear, tmpD, d) < d - 0.1) r *= c.muffledFactor;
     if (d > r) return;
     const err = c.soundError * (d / r);
-    const guess = new THREE.Vector3(pos.x + (Math.random() - 0.5) * 2 * err, pos.y, pos.z + (Math.random() - 0.5) * 2 * err);
+    let guess = new THREE.Vector3(pos.x + (Math.random() - 0.5) * 2 * err, pos.y, pos.z + (Math.random() - 0.5) * 2 * err);
+    const z = this.zoneAt(pos, 1.2) || this.zoneAt(guess, 1.2);   // judge by where the sound really was
+    if (z && this.state !== S.PURSUE) {
+      // anti-camping: a zone he has just checked is ignored until its cooldown ends (unless he saw the child)
+      if (this.game.time < z.until && !this.recentlySawChild()) return;
+      // noises from the basement: he goes to the top of the stairs to listen, not down into it
+      if (z.layer === -1) guess = this.stairListenPoint();
+    }
     this.memory.sounds.push({ pos: guess, t: this.game.time, kind });
     if (this.memory.sounds.length > 6) this.memory.sounds.shift();
     if (this.state === S.PURSUE) {
@@ -167,14 +179,29 @@ export class Antagonist {
     }
   }
 
-  // Called by the game when the child climbs into a hiding place.
+  // ---------------- exclusion zones (anti spawn-camping) ----------------
+  zoneAt(p, margin = 0) {
+    for (const z of this.zones) {
+      if (z.layer === -1) { if (p.y < -1) return z; continue; }
+      const [x0, z0, x1, z1] = z.rect;
+      if (p.x > x0 - margin && p.x < x1 + margin && p.z > z0 - margin && p.z < z1 + margin && p.y > -1) return z;
+    }
+    return null;
+  }
+  recentlySawChild(sec = 10) { return this.game.time - this.memory.lastSeenT < sec; }
+  // after dealing with a zone he leaves it alone for its cooldown
+  coolZone(z) { if (z) { z.until = this.game.time + z.cooldown; this.log.push(`${this.game.time.toFixed(1)} cooldown ${z.name}`); } }
+  // the nearest point just outside the basement-exit zone (where he stands to listen down the stairs)
+  stairListenPoint() { return new THREE.Vector3(px(460), 0, pz(405)); }
+
+  // Called by the game when the child climbs into a hiding place. Hidden children are SAFE under the
+  // current design: he may have seen it and walk over to stare at the spot, but he never catches them there.
   onChildHid(spot) {
     if (this.state === S.SCRIPTED || this.state === S.DORMANT) return;
     const since = this.game.time - this.memory.lastSeenT;
     if (since < this.cfg.sawHideWindow && this.distTo(spot.pos) < this.cfg.visionRangeFlashlight) {
-      // he watched the child go in: he goes straight there
       if (this.state !== S.PURSUE) this.setState(S.PURSUE, 'saw hiding');
-      this.checking = spot; this.knowsHidden = true;
+      this.checking = spot; this.knowsHidden = true;  // goes there, lingers, then searches the area
     }
   }
 
@@ -270,7 +297,7 @@ export class Antagonist {
 
   // ---------------- per-state behaviour ----------------
   update(dt) {
-    if (this.state === S.DORMANT || this.state === S.SCRIPTED) return;
+    if (this.state === S.DORMANT || this.state === S.SCRIPTED || this.capture) return;
     const c = this.cfg, g = this.game, pl = g.player;
     this.stateT += dt;
     if (this.graceT > 0) this.graceT -= dt;
@@ -308,7 +335,8 @@ export class Antagonist {
       if (this.stepAcc > stride) {
         this.stepAcc = 0;
         const surf = this.W.col.groundAt(this.pos.x, this.pos.z, this.pos.y + 0.1).surface;
-        this.W.audio?.footstep(surf, this.speed > 3 ? 1.6 : 1.05, this.pos.clone().setY(this.pos.y + 0.1));
+        this.W.audio?.footstep(surf, this.speed > 3 ? 1.5 : 1.0, this.pos.clone().setY(this.pos.y + 0.1), 'occupant');
+        this.game.floorCreak?.(this.pos, 'occupant');
       }
     }
     const dpl = this.pos.distanceTo(pl.pos);
@@ -321,18 +349,38 @@ export class Antagonist {
     this.lookYaw = this.lookBase + Math.sin(this.lookAround * 1.1) * 1.2;
   }
 
+  // Pick the next patrol point: never in an exclusion zone, not one of the last few, prefer rooms he has
+  // not visited for a while and points a reasonable distance away. Weighted random, so it is not predictable.
+  nextPatrolPoint() {
+    const t = this.game.time;
+    const cands = this.patrolPoints.filter((p) => !this.recentPatrol.includes(p) && !this.zoneAt(p) && this.distTo(p) > 3);
+    let total = 0;
+    const w = cands.map((p) => {
+      const since = t - (this.roomVisitT[p.room] ?? -1e9);
+      let wt = since > RECENT_ROOM_COOLDOWN ? 3 : 0.4;
+      const d = this.distTo(p);
+      wt *= d < 6 ? 0.7 : d > 16 ? 0.8 : 1.2;
+      total += wt; return wt;
+    });
+    let r = Math.random() * total;
+    for (let i = 0; i < cands.length; i++) { r -= w[i]; if (r <= 0) return cands[i]; }
+    return cands[0] || this.patrolPoints[0];
+  }
+
   patrol(dt) {
     if (this.pause > 0) { this.pause -= dt; this.lookAroundUpdate(dt); this.speed = 0; return false; }
     if (!this.path.length || !this.goal) {
-      const pool = this.patrolPoints.filter((p) => !this.recentPatrol.includes(p) && Math.hypot(p.x - this.pos.x, p.z - this.pos.z) > 3);
-      const next = pool[Math.floor(Math.random() * pool.length)] || this.patrolPoints[0];
-      this.recentPatrol.push(next); if (this.recentPatrol.length > 4) this.recentPatrol.shift();
+      const next = this.nextPatrolPoint();
+      this.patrolTarget = next;
+      this.recentPatrol.push(next); if (this.recentPatrol.length > 5) this.recentPatrol.shift();
       if (!this.pathTo(new THREE.Vector3(next.x, 0, next.z))) { this.pause = 1; return false; }
     }
     const moving = this.follow(dt, this.cfg.walkSpeed);
     if (this.arrived() || (!moving && this.path.length)) {
       const [a, b] = this.cfg.patrolPause;
-      this.pause = a + Math.random() * (b - a);
+      // never stand around inside an exclusion zone (e.g. outside the basement door)
+      this.pause = this.zoneAt(this.pos) ? 0 : a + Math.random() * (b - a);
+      if (this.patrolTarget) this.roomVisitT[this.patrolTarget.room] = this.game.time;
       this.lookBase = this.yaw; this.lookAround = 0;
       this.path = []; this.goal = null;
     }
@@ -351,6 +399,13 @@ export class Antagonist {
     }
     if (this.investigatePhase === 'look') {
       this.speed = 0; this.lookAroundUpdate(dt);
+      const zone = this.zoneAt(this.goal, 1.2);
+      if (zone && this.stateT > this.cfg.investigateLookTime * 0.6) {
+        // checked the area near the basement: nothing. Leave it alone for a while and go elsewhere.
+        this.coolZone(zone);
+        this.beginSearch(this.outsideZone(this.goal), 10);
+        return false;
+      }
       if (this.stateT > this.cfg.investigateLookTime) {
         // check one nearby hiding place, then search the area for a while
         const spot = this.pickHidingSpot(this.goal, 4.5, 1);
@@ -366,7 +421,7 @@ export class Antagonist {
   pursue(dt) {
     const c = this.cfg, pl = this.game.player, m = this.memory;
     const since = this.game.time - m.lastSeenT;
-    if (this.checking) return this.checkSpot(dt, () => this.beginSearch(this.checking.front, 15));
+    if (this.checking) { const sp = this.checking; return this.checkSpot(dt, () => this.beginSearch(sp.front, 15)); }
     if (!this.seen && since > c.pursuitMemory) {
       this.setState(S.LOST, 'lost sight');
       const ex = m.lastSeen ? m.lastSeen.clone().addScaledVector(m.vel, Math.min(1.5, since)) : this.pos.clone();
@@ -406,14 +461,29 @@ export class Antagonist {
     return false;
   }
 
+  // move a point out of any exclusion zone (search around it, not inside it)
+  outsideZone(p) {
+    const z = this.zoneAt(p);
+    if (!z) return p.clone();
+    // search the rooms around the zone instead: the nearest patrol point at least 5 m from the stairs
+    const exit = this.stairListenPoint();
+    const pts = this.patrolPoints.filter((q) => Math.hypot(q.x - exit.x, q.z - exit.z) > 5)
+      .sort((a, b) => Math.hypot(a.x - exit.x, a.z - exit.z) - Math.hypot(b.x - exit.x, b.z - exit.z));
+    const q = pts[Math.floor(Math.random() * Math.min(3, pts.length))];
+    return new THREE.Vector3(q.x, 0, q.z);
+  }
+
   beginSearch(center, duration) {
+    const z = this.zoneAt(center);
+    if (z && !(z.layer === -1 && this.pos.y < -1)) { this.coolZone(z); center = this.outsideZone(center); duration = Math.min(duration, 12); }
+    if (z && z.layer === -1 && this.pos.y < -1) duration = Math.min(duration, 12); // brief look round the basement only
     this.setState(S.SEARCH, 'searching');
-    this.search = { center: center.clone(), until: this.game.time + duration, checks: 0, phase: 'pick' };
+    this.search = { center: center.clone(), until: this.game.time + duration, checks: 0, phase: 'pick', zone: z };
   }
 
   searchUpdate(dt) {
     const s = this.search, c = this.cfg;
-    if (!s || this.game.time > s.until) { this.setState(S.PATROL, 'gave up'); return false; }
+    if (!s || this.game.time > s.until) { if (s?.zone) this.coolZone(s.zone); this.setState(S.PATROL, 'gave up'); return false; }
     if (s.phase === 'check') return this.checkSpot(dt, () => { s.phase = 'pick'; });
     if (s.phase === 'pause') {
       this.speed = 0; this.lookAroundUpdate(dt);
@@ -423,9 +493,15 @@ export class Antagonist {
     if (s.phase === 'pick') {
       const spot = s.checks < c.maxHidingChecks && Math.random() < c.hidingCheckChance ? this.pickHidingSpot(s.center, 7) : null;
       if (spot) { s.checks++; this.checking = spot; s.phase = 'check'; this.pathTo(spot.front); return false; }
-      const n = this.nav.randomNear(s.center.x, s.center.y, s.center.z, c.searchRadius);
+      let n = -1, p = null;
+      for (let k = 0; k < 6 && n < 0; k++) {
+        const m = this.nav.randomNear(s.center.x, s.center.y, s.center.z, c.searchRadius);
+        if (m < 0) continue;
+        const q = this.nav.nodePos(m);
+        if (this.zoneAt(q) && !(s.zone && s.zone.layer === -1 && this.pos.y < -1)) continue; // do not search inside zones
+        n = m; p = q;
+      }
       if (n < 0) { s.phase = 'pause'; s.pauseT = 2; return false; }
-      const p = this.nav.nodePos(n);
       this.pathTo(new THREE.Vector3(p.x, p.y, p.z));
       s.phase = 'go';
     }
@@ -442,7 +518,8 @@ export class Antagonist {
     return spots[Math.floor(Math.random() * spots.length)];
   }
 
-  // walk to a hiding place, open it, look inside
+  // Walk to a hiding place and inspect it from outside: he stands there, tries the handle / crouches to
+  // look, breathes, then moves on. Under the current design a hidden child is never caught here.
   checkSpot(dt, done) {
     const spot = this.checking;
     if (!spot) { done(); return false; }
@@ -454,13 +531,14 @@ export class Antagonist {
     }
     this.speed = 0;
     this.lookYaw = Math.atan2(spot.pos.x - this.pos.x, spot.pos.z - this.pos.z);
-    this.reach = 1;
+    this.reach = spot.type === 'cupboard' ? 0.6 : 0;
     spot.checkT = (spot.checkT || 0) + dt;
-    if (spot.checkT > 0.2 && !spot.opened) { spot.opened = true; this.W.audio?.creak(spot.pos, 0.09); }
-    if (spot.checkT > 1.1) {
-      spot.checkT = 0; spot.opened = false; spot.lastChecked = this.search?.until;
+    if (spot.checkT > 0.3 && !spot.rattled) { spot.rattled = true; if (spot.type === 'cupboard') this.W.audio?.rattle(spot.pos); }
+    const linger = this.knowsHidden ? 3.0 : 1.4;   // he lingers longer if he saw the child go in
+    if (spot.checkT > linger) {
+      spot.checkT = 0; spot.rattled = false; spot.lastChecked = this.search?.until;
       this.reach = 0;
-      if (this.game.hiding?.spot === spot) { this.game.caughtByOccupant('He found you.'); return false; }
+      this.game.emit('spotChecked', { spot, childInside: this.game.hiding?.spot === spot });
       this.checking = null; this.knowsHidden = false;
       done();
     }

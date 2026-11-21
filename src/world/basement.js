@@ -139,6 +139,7 @@ export function buildBasement(W) {
   W.spots.clipboard = clip;
   place(W, P.boxes(3, 7), 8.8, B.y, 4.8, 0.3, true);
   W.spots.centerTable = place(W, P.table(1.2, 0.7), 9.3, B.y, -0.4, 0.2, true);
+  (W.spots.tables ||= []).push({ name: 'basement table', group: W.spots.centerTable, w: 1.2, l: 0.7, h: 0.76 });
   place(W, P.chair(), 9.3, B.y, 0.3, Math.PI + 0.4, true);
   for (let i = 0; i < 5; i++) {
     const s = new THREE.Mesh(new THREE.CircleGeometry(0.12 + (i % 3) * 0.06, 10), m.blood);

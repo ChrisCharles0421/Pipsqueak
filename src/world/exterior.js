@@ -107,7 +107,7 @@ export function buildExterior(W) {
 
   // ---------- rear: patio, garden, shed, retaining wall + culvert ----------
   box(W, 8.0, -0.03, -3.5, 15.5, 0.02, -0.2, m.concrete);
-  place(W, P.table(1.0, 1.0, 0.7, m.rust), 10.5, 0, -1.8, 0.3, true);
+  (W.spots.tables ||= []).push({ name: 'patio table', group: place(W, P.table(1.0, 1.0, 0.7, m.rust), 10.5, 0, -1.8, 0.3, true), w: 1.0, l: 1.0, h: 0.7 });
   place(W, P.chair(), 11.4, 0, -2.4, 2.2, true);
   const fallen = P.chair(); place(W, fallen, 9.6, 0, -1.2, 0, false); fallen.rotation.z = Math.PI / 2; fallen.position.y = 0.22;
 

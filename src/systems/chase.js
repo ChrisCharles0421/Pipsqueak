@@ -64,6 +64,7 @@ export class Chase {
   }
 
   update(dt) {
+    if (this.game.jump) return;                 // the jumpscare owns his body while it plays
     if (this.state === 'idle') { if (this.canStart()) this.start(); return; }
     const W = this.W, pl = this.game.player, p = pl.pos;
     this.t += dt;
@@ -102,7 +103,7 @@ export class Chase {
     this.stepAcc += this.speed * dt;
     if (this.stepAcc > 0.85) {
       this.stepAcc = 0;
-      W.audio?.footstep('water', 1.4 + Math.max(0, 6 - d) * 0.25, this.pos.clone().setY(this.pos.y + 0.1));
+      W.audio?.footstep('water', 1.2 + Math.max(0, 6 - d) * 0.2, this.pos.clone().setY(this.pos.y + 0.1), 'occupant');
     }
     W.audio?.setBreath(this.pos.clone().setY(this.pos.y + 1.6), Math.min(1.2, 0.2 + 3 / Math.max(1, d)), this.speed > 3 ? 1.6 : 0.8);
   }

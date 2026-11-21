@@ -36,6 +36,7 @@ document.getElementById('resume').onclick = () => { ui.show('pause', false); gam
 document.getElementById('restart-checkpoint').onclick = () => { ui.show('pause', false); game.retry(); input.lock(); };
 document.getElementById('retry').onclick = () => { game.retry(); input.lock(); };
 document.getElementById('again').onclick = () => location.reload();
+document.getElementById('restart-all').onclick = () => location.reload();
 document.getElementById('sens').oninput = (e) => { input.sensitivity = 0.0022 * Number(e.target.value); };
 document.getElementById('vol').oninput = (e) => { game.audio.volume = Number(e.target.value); if (game.audio.master) game.audio.master.gain.value = game.audio.volume; };
 document.getElementById('reader').onclick = () => ui.closeReader();
@@ -52,6 +53,7 @@ addEventListener('resize', () => {
   game.camera.aspect = innerWidth / innerHeight;
   game.camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  game.viewModel.resize();
 });
 
 let last = performance.now();
@@ -61,7 +63,7 @@ function frame(now) {
   game.update(dt, input);
   input.endFrame();
   if (DEBUG && window.__renderOverride) window.__renderOverride();
-  else renderer.render(game.scene, game.camera);
+  else { renderer.render(game.scene, game.camera); game.viewModel.render(renderer); }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -74,11 +76,12 @@ if (DEBUG) {
     teleport(x, y, z, yaw = 0) { game.player.spawn(x, y, z, yaw); },
     state() {
       const p = game.player.pos;
-      return { x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2), zone: game.zone, room: game.room, objective: game.objective,
+      return { equipped: game.player.equipped, beam: game.player.flashOn, vmVisible: game.viewModel.rig.visible, hidingPhase: game.hiding?.phase || null, jump: !!game.jump,
+        x: +p.x.toFixed(2), y: +p.y.toFixed(2), z: +p.z.toFixed(2), zone: game.zone, room: game.room, objective: game.objective,
         ai: game.ai.state, aiPos: [+game.ai.pos.x.toFixed(2), +game.ai.pos.y.toFixed(2), +game.ai.pos.z.toFixed(2)], aware: +game.ai.awareness.toFixed(2), hiding: !!game.hiding,
         chase: game.chase.state, gap: +(game.chase.pos.z - p.z).toFixed(2), state: game.state, inv: [...game.inventory.items], prompt: document.getElementById('prompt').textContent };
     },
-    give(id) { game.inventory.add(id); if (id === 'flashlight') { game.player.hasFlash = true; game.player.setFlash(true); } },
+    give(id) { game.inventory.add(id); if (id === 'flashlight') { game.player.hasFlash = true; game.player.setFlash(true); game.viewModel.equip = 1; game.player.beamReady = true; game.player.applyBeam(); } },
     look(yaw, pitch = 0) { game.player.yaw = yaw; game.player.pitch = pitch; },
     press(code) { input.pressed.add(code); },
     topDown(cx, cz, size, y = 2.6) {

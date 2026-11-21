@@ -1,10 +1,24 @@
-// Procedural audio (Web Audio API). No external sound files are needed.
-// Spatial one-shots use PannerNodes positioned in world space; the listener follows the camera.
+// Central audio manager (Web Audio API).
+// Recorded samples live in public/audio/ and are loaded at start; every sound also has a procedural
+// fallback, so the game still works if a file is missing. Spatial sounds use HRTF PannerNodes in world
+// space; the listener follows the camera. Each playing source is tracked per key so identical sounds
+// cannot pile up, and every node is disconnected when its sound ends.
+
+// file -> how it is used. trimStart skips leading silence; gain normalises loudness.
+export const SAMPLES = {
+  footsteps: { file: 'audio/footsteps_audio.mp3', slice: 'onsets', gain: 0.62 },
+  woodcreak: { file: 'audio/woodcreak_audio.mp3', gain: 1.0 },
+  gunshot: { file: 'audio/gunshot_audio.mp3', trimStart: 'auto', gain: 0.62 },
+};
+
 export class Audio {
   constructor() {
     this.ctx = null;
     this.enabled = false;
     this.volume = 0.8;
+    this.samples = {};      // name -> { buffer, slices:[{start,dur}], start }
+    this.active = {};       // key -> Set of live sources (for overlap limits)
+    this.lastSlice = {};
   }
 
   start() {
@@ -25,6 +39,69 @@ export class Audio {
     this.brownBuf = this.makeNoise(4, true);
     this.enabled = true;
     this.startAmbience();
+    this.loaded = this.loadSamples();
+  }
+
+  async loadSamples() {
+    const base = (import.meta.env && import.meta.env.BASE_URL) || './';
+    await Promise.all(Object.entries(SAMPLES).map(async ([name, cfg]) => {
+      try {
+        const res = await fetch(base + cfg.file);
+        if (!res.ok) throw new Error(res.status);
+        const buffer = await this.ctx.decodeAudioData(await res.arrayBuffer());
+        const info = { buffer, start: 0, slices: null, cfg };
+        const onsets = detectOnsets(buffer);
+        if (cfg.trimStart === 'auto') info.start = Math.max(0, (onsets[0] ?? 0) - 0.02);
+        if (cfg.slice === 'onsets' && onsets.length > 1) {
+          info.slices = onsets.map((t, i) => {
+            const end = i + 1 < onsets.length ? onsets[i + 1] : buffer.duration;
+            return { start: Math.max(0, t - 0.015), dur: Math.min(0.5, end - t - 0.02) };
+          });
+        }
+        this.samples[name] = info;
+      } catch (e) {
+        console.warn(`[audio] ${cfg.file} unavailable, using procedural fallback`, e.message || e);
+      }
+    }));
+    return Object.keys(this.samples);
+  }
+
+  // Play part of a loaded sample. Returns the source or null (not loaded / overlap limit reached).
+  playSample(name, { pos = null, gain = 1, rate = 1, offset = 0, dur = null, key = name, maxInstances = 4, wet = 0.2, lowpass = null, highpass = null, fadeOut = 0.08, delay = 0, ref = 2, rolloff = 1.2 } = {}) {
+    if (!this.enabled) return null;
+    const smp = this.samples[name]; if (!smp) return null;
+    const live = (this.active[key] ||= new Set());
+    if (live.size >= maxInstances) return null;
+    const c = this.ctx, t = c.currentTime + delay;
+    const src = c.createBufferSource();
+    src.buffer = smp.buffer;
+    src.playbackRate.value = rate;
+    let node = src;
+    const chain = [src];
+    if (lowpass) { const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lowpass; node.connect(f); node = f; chain.push(f); }
+    if (highpass) { const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = highpass; node.connect(f); node = f; chain.push(f); }
+    const g = c.createGain();
+    const total = (smp.cfg.gain ?? 1) * gain;
+    const length = (dur ?? (smp.buffer.duration - offset)) / rate;
+    g.gain.setValueAtTime(total, t);
+    if (fadeOut > 0 && length > fadeOut) { g.gain.setValueAtTime(total, t + length - fadeOut); g.gain.linearRampToValueAtTime(0.0001, t + length); }
+    node.connect(g); chain.push(g);
+    let dest = this.master, pan = null;
+    if (pos) { pan = this.panner(pos, ref, rolloff); g.connect(pan); pan.connect(this.master); chain.push(pan); } else g.connect(this.master);
+    let send = null;
+    if (wet > 0) { send = c.createGain(); send.gain.value = wet; g.connect(send); send.connect(this.reverb); chain.push(send); }
+    src.start(t, smp.start + offset, dur ?? undefined);
+    live.add(src);
+    src.onended = () => { live.delete(src); for (const n of chain) { try { n.disconnect(); } catch { /* already */ } } };
+    return src;
+  }
+
+  pickSlice(name) {
+    const smp = this.samples[name]; if (!smp?.slices) return null;
+    let i = Math.floor(Math.random() * smp.slices.length);
+    if (i === this.lastSlice[name]) i = (i + 1) % smp.slices.length;
+    this.lastSlice[name] = i;
+    return smp.slices[i];
   }
 
   makeNoise(sec, brown = false) {
@@ -54,6 +131,7 @@ export class Audio {
     if (!this.enabled) return;
     const l = this.ctx.listener;
     const p = cam.position;
+    this.listenerPos = { x: p.x, y: p.y, z: p.z };
     const f = cam.getWorldDirection(this._v || (this._v = cam.position.clone()));
     const t = this.ctx.currentTime;
     if (l.positionX) {
@@ -118,20 +196,42 @@ export class Audio {
   }
 
   // ---------- game sounds ----------
-  footstep(surface, loud = 1, pos = null) {
+  // One footstep, triggered by actual movement (distance walked), never by a timer.
+  // who: 'player' | 'occupant'. The occupant's steps are lower-pitched, heavier and positional.
+  footstep(surface, loud = 1, pos = null, who = 'player') {
+    const sl = this.pickSlice('footsteps');
+    if (sl) {
+      const occ = who === 'occupant';
+      const filt = { carpet: { lowpass: 1400 }, grass: { lowpass: 2200 }, tile: { highpass: 250 }, water: { lowpass: 3000 } }[surface] || {};
+      const rate = (occ ? 0.8 : 1.04) * (0.96 + Math.random() * 0.08) * (loud > 1.2 && !occ ? 1.06 : 1);
+      this.playSample('footsteps', {
+        pos, offset: sl.start, dur: sl.dur, rate, gain: (occ ? 0.75 : 0.32) * loud * (surface === 'carpet' ? 0.6 : 1),
+        key: occ ? 'stepsOcc' : 'stepsPlayer', maxInstances: 3, wet: surface === 'concrete' || surface === 'water' ? 0.45 : 0.12,
+        ...filt, ...(occ ? { lowpass: Math.min(filt.lowpass || 9000, 2600) } : {}), ref: occ ? 2.5 : 1,
+      });
+      if (surface === 'water') this.noiseHit({ pos, freq: 1200, q: 0.7, dur: 0.15, gain: 0.06 * loud, wet: 0.5 });
+      return;
+    }
     const s = {
       wood: { freq: 420, q: 1.2, dur: 0.09 }, carpet: { freq: 250, q: 0.8, dur: 0.06 },
       tile: { freq: 1400, q: 2, dur: 0.05 }, concrete: { freq: 900, q: 1.5, dur: 0.06 },
       grass: { freq: 2500, q: 0.6, dur: 0.12 }, water: { freq: 1200, q: 0.7, dur: 0.18 },
     }[surface] || { freq: 600, q: 1, dur: 0.07 };
     this.noiseHit({ pos, ...s, gain: 0.12 * loud, wet: surface === 'water' || surface === 'concrete' ? 0.5 : 0.15 });
-    if (surface === 'wood' && Math.random() < 0.12) this.creak(pos, 0.05);
   }
-  creak(pos, gain = 0.08) {
+  // Wood creak: a random section of the recording, varied pitch/length, at most two at once.
+  creak(pos, gain = 0.08, { len = null, key = 'creak' } = {}) {
+    const smp = this.samples.woodcreak;
+    if (smp) {
+      const d = len ?? (0.45 + Math.random() * 0.6);
+      const offset = 0.1 + Math.random() * Math.max(0, smp.buffer.duration - d - 0.2);
+      this.playSample('woodcreak', { pos, offset, dur: d, rate: 0.85 + Math.random() * 0.3, gain: gain * 6, key, maxInstances: 2, wet: 0.3, fadeOut: 0.15, delay: Math.random() * 0.06 });
+      return;
+    }
     this.tone({ pos, f0: 140 + Math.random() * 80, f1: 90 + Math.random() * 60, dur: 0.5, gain, type: 'sawtooth', wet: 0.4 });
   }
   door(open, pos) {
-    this.creak(pos, 0.06);
+    this.creak(pos, 0.05, { len: open ? 0.7 : 0.4, key: 'doorCreak' });
     if (!open) this.noiseHit({ pos, freq: 180, q: 0.8, dur: 0.25, gain: 0.35, type: 'lowpass', wet: 0.4 });
   }
   rattle(pos) {
@@ -176,11 +276,21 @@ export class Audio {
     this.noiseHit({ freq: 300, q: 0.5, dur: 0.4, gain: 0.8, type: 'lowpass', wet: 0.3 });
     this.sting(0.25);
   }
-  gunshot() {
+  // Gunshot for the ending. The child fires, so it is not positional; strong reverb for the tunnel.
+  gunshot(index = 0) {
     if (!this.enabled) return;
+    if (this.samples.gunshot) {
+      this.playSample('gunshot', { gain: 1, rate: [1, 0.97, 1.02][index % 3], key: `gunshot${index}`, maxInstances: 1, wet: 0.5, fadeOut: 0.3 });
+      return;
+    }
     this.noiseHit({ freq: 2500, q: 0.3, dur: 0.35, gain: 1.0, type: 'lowpass', wet: 0.9, attack: 0.001 });
     this.noiseHit({ freq: 120, q: 0.6, dur: 0.6, gain: 1.0, type: 'lowpass', wet: 0.9, attack: 0.001 });
     this.tone({ f0: 90, f1: 30, dur: 0.5, gain: 0.7, type: 'sine', wet: 0.6 });
+  }
+  // the house settling: occasional distant creaks (no gameplay effect)
+  settle(listenerPos) {
+    const a = Math.random() * Math.PI * 2, d = 4 + Math.random() * 6;
+    this.creak({ x: listenerPos.x + Math.cos(a) * d, y: listenerPos.y + 2.2, z: listenerPos.z + Math.sin(a) * d }, 0.04, { len: 0.8 + Math.random() * 0.6, key: 'settle' });
   }
 
   // ---------- loops ----------
@@ -237,6 +347,10 @@ export class Audio {
 
   update(dt) {
     if (!this.enabled) return;
+    if (this.zone === 'house' || this.zone === 'basement') {
+      this.settleT = (this.settleT ?? 20) - dt;
+      if (this.settleT <= 0 && this.listenerPos) { this.settleT = 25 + Math.random() * 35; this.settle(this.listenerPos); }
+    }
     if (this.zone === 'sewer') {
       this.dripT -= dt;
       if (this.dripT <= 0) {
@@ -253,4 +367,15 @@ export class Audio {
     this.breathGain.gain.setValueAtTime(0, t);
     this.zone = 'silent';
   }
+}
+
+// Find sound onsets (start of each footstep / shot) from the RMS envelope.
+export function detectOnsets(buffer, { win = 0.01, rel = 0.25, minGap = 0.18 } = {}) {
+  const sr = buffer.sampleRate, ch = buffer.getChannelData(0);
+  const n = Math.floor(win * sr), rms = [];
+  for (let i = 0; i + n <= ch.length; i += n) { let s = 0; for (let k = 0; k < n; k++) s += ch[i + k] * ch[i + k]; rms.push(Math.sqrt(s / n)); }
+  const max = Math.max(...rms), thr = max * rel, out = [];
+  let last = -1e9;
+  for (let i = 1; i < rms.length; i++) if (rms[i] > thr && rms[i - 1] <= thr && (i - last) * win > minGap) { out.push(i * win); last = i; }
+  return out;
 }

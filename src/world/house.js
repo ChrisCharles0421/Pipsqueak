@@ -188,7 +188,9 @@ function furnish(W) {
   put(P.shelf(1.4, 2.0, 0.4), 272, 220, HALF);
   put(P.table(1.0, 0.6, 0.45), 335, 225, 0);
   // Dining room
-  put(P.table(2.2, 1.1), 572, 265, 0);
+  W.spots.tables = W.spots.tables || [];
+  const tableAt = (name, g, w, l, h = 0.76) => W.spots.tables.push({ name, group: g, w, l, h });
+  tableAt('dining table', put(P.table(2.2, 1.1), 572, 265, 0), 2.2, 1.1);
   for (const dx of [-0.7, 0, 0.7]) {
     const [X, Z] = at(572, 265);
     place(W, P.chair(), X + dx, 0, Z - 0.8, 0, true);
@@ -200,6 +202,7 @@ function furnish(W) {
   put(P.counter(2.2), 646, 440, -HALF);
   put(P.fridge(), 505, 495, Math.PI);
   W.spots.kitchenTable = put(P.table(1.0, 0.8), 555, 430, 0);
+  tableAt('kitchen table', W.spots.kitchenTable, 1.0, 0.8);
   // Utility room
   put(P.shelf(1.8, 2.0, 0.45), 385, 440, Math.PI / 2);
   put(P.boxes(3, 2), 395, 492, 0);
@@ -214,7 +217,8 @@ function furnish(W) {
   // Boys' bedroom
   put(P.bed(1.0, 1.9, m.fabricBlue), 115, 760, HALF);
   hideAt("boys' wardrobe", put(P.wardrobe(1.0), 245, 765, -HALF));
-  put(P.table(1.1, 0.6), 175, 793, Math.PI);
+  tableAt('desk', put(P.table(1.1, 0.6), 175, 793, Math.PI), 1.1, 0.6);
+  // too low to hide under: the living-room coffee table is not registered
   put(P.chair(), 175, 770, Math.PI);
   // Garage
   put(P.car(), 520, 660, 0);

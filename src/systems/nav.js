@@ -137,7 +137,8 @@ export class NavGrid {
           if (!this.walkable(n)) continue;
           const dy = Math.abs(this.h[n] - y);
           if (dy > 1.2) continue;
-          const d = dx * dx + dz * dz + dy * 4;
+          // strongly prefer cells on the same floor level (never snap onto the stairs from a room)
+          const d = dx * dx + dz * dz + (dy > 0.5 ? 400 : dy * 4);
           if (d < bestD) { bestD = d; best = n; }
         }
       }

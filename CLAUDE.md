@@ -952,3 +952,11 @@ When first entering the project:
 - Doors use oriented segment colliders that follow the leaf at every angle. Closing stops if a body is in the way. Opening pushes bodies aside.
 - The basement door opens into the stairwell, so the open leaf never blocks the stair hall.
 - The navigation grid is generated from collision data. Any change to walls, doors or furniture is picked up automatically, but check that rooms stay connected with `tests/ai.py patrol_connectivity`.
+
+## 17.4 Development update 3 — CONFIRMED by user
+
+- Integrated audio: `public/audio/footsteps_audio.mp3`, `woodcreak_audio.mp3` and `gunshot_audio.mp3`.
+- The flashlight is visible in the child's hand when equipped and hidden when put away. The beam comes from the model's lens.
+- Hidden children (cupboard or under a table) are never caught. He may inspect the spot.
+- Capture plays a jumpscare, then the game-over screen. His face and name stay concealed.
+- No spawn camping: he spawns in the garage, has exclusion zones (basement exit and basement), zone cooldowns, and weighted patrol.

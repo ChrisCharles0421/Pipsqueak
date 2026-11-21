@@ -6,7 +6,7 @@ export class UI {
     this.el = {
       prompt: $('prompt'), objective: $('objective'), toast: $('toast'), reticle: $('reticle'), hint: $('hint'),
       reader: $('reader'), readerTitle: $('reader-title'), readerBody: $('reader-body'), readerImage: $('reader-image'),
-      hidingOverlay: $('hidingOverlay'), endingImage: $('ending-image'),
+      hidingOverlay: $('hidingOverlay'), endingImage: $('ending-image'), jumpFlash: $('jumpFlash'),
       journal: $('journal'), jItems: $('journal-items'), jClues: $('journal-clues'),
       fade: $('fade'), title: $('title'), pause: $('pause'), death: $('death'), deathText: $('death-text'),
       ending: $('ending'), endingText: $('ending-text'), again: $('again'), hud: $('hud'),

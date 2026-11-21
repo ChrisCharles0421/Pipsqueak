@@ -7,7 +7,7 @@ window.T = (() => {
   const S = 0.03, px = (x) => (x - 80) * S, pz = (y) => (y - 80) * S;
   const reset = () => {
     G.teleport(5.6, -3, -3.2, 0); ai.pos.set(px(600), 0, pz(700));
-    G.give('flashlight'); game.state = 'play'; game.hiding = null; game.ui.show('death', false); game.ui.show('hidingOverlay', false);
+    G.give('flashlight'); game.jump = null; ai.capture = false; game.state = 'play'; game.hiding = null; game.ui.show('death', false); game.ui.show('hidingOverlay', false);
     pl.frozen = false; pl.flashOn = false; pl.crouching = false; ['KeyW','ShiftLeft','KeyC'].forEach(k => G.hold(k, false));
     ai.state = null; ai.setState('PATROL', 'test'); ai.awareness = 0; ai.graceT = 0; ai.memory.lastSeen = null; ai.memory.lastSeenT = -1e9; ai.fig.visible = true;
     for (const d of W.doors) { if (!d.locked) { d.setOpen(false, { silent: true, by: 'test' }); } }
@@ -82,14 +82,15 @@ TESTS = {
   reset(); put(px(160), pz(470), Math.PI); G.teleport(spot.front.x, 0, spot.front.z, 0); pl.flashOn = true;
   G.simulate(1.5, 1/30, () => ai.state === 'PURSUE');
   game.hide(spot);
-  let tA = G.simulate(12, 1/30, () => game.state !== 'play');
-  const A = { gameState: game.state, text: document.getElementById('death-text').textContent };
+  let tA = G.simulate(20, 1/30, () => game.state !== 'play');
+  if (game.hiding) { game.hiding.phase = 'hidden'; game.unhide(); G.simulate(1); }
+  const A = { gameState: game.state, caughtWhileHidden: game.state !== 'play' };
   // B) the child hides unseen, he only heard a noise nearby -> outcome depends on chance; report it
   reset(); put(px(250), pz(470), Math.PI); game.hide(spot); ai.hear(new (G.THREE.Vector3)(spot.front.x, 0, spot.front.z), 12, 'test');
   const seq = []; let last = '';
   G.simulate(45, 1/30, () => { if (ai.state !== last) { seq.push(ai.state); last = ai.state; } return game.state !== 'play'; });
-  const B = { gameState: game.state, sequence: seq };
-  game.unhide();
+  const B = { gameState: game.state, caughtWhileHidden: game.state !== 'play', sequence: seq };
+  if (game.hiding) { game.hiding.phase = 'hidden'; game.unhide(); G.simulate(1); }
   return { seenHiding: A, unseenHiding: B };
 })()""",
 "patrol_connectivity": r"""(() => { const {game,ai} = T; const nav = game.nav; const pts = ai.patrolPoints; const bad = [];
@@ -101,8 +102,8 @@ TESTS = {
 })()""",
 "pursue_outside": r"""(() => { const {G,game,W,ai,pl,reset,put,px,pz} = T;
   const d = W.doorsByName.garageSide; const was = d.locked; d.locked = false; reset(); d.setOpen(true, {silent:true, by:'test'}); G.simulate(1);
-  put(px(560), pz(792), Math.PI/2 + 0.6); G.teleport(px(630), 0, pz(718), -Math.PI/2); pl.flashOn = true;
-  G.simulate(2.5, 1/30, () => ai.state === 'PURSUE');
+  put(px(560), pz(792), Math.PI/2 + 0.6); G.teleport(px(630), 0, pz(718), -Math.PI/2);
+  ai.memory.lastSeen = pl.pos.clone(); ai.memory.lastSeenT = game.time; ai.awareness = 1.2; ai.setState('PURSUE', 'test'); // he has just spotted the child
   const s0 = ai.state;
   // the child runs out of the side door and away across the yard
   G.hold('KeyW', true); G.hold('ShiftLeft', true); G.look(-Math.PI/2, 0);
@@ -113,11 +114,12 @@ TESTS = {
 })()""",
 "door_shut_in_his_face": r"""(() => { const {G,game,W,ai,pl,reset,put,px,pz} = T;
   const d = W.doorsByName.utilityTop; reset(); d.setOpen(true, {silent:true, by:'test'}); G.simulate(1);
-  put(px(457), pz(355), 0); ai.pause = 100; ai.lookBase = 0; ai.lookAround = 0; G.teleport(px(457), 0, pz(470), 0); pl.flashOn = true; // he is in the stair hall, child deep in the utility room
-  G.simulate(3, 1/30, () => ai.state === 'PURSUE');
+  put(px(380), pz(350), Math.PI / 2); G.teleport(px(457), 0, pz(470), 0); // he is in the living room, child in the utility room
+  ai.pause = 100;
+  d.setOpen(false, {silent:true, by:'player'}); G.simulate(0.8);                 // the child has shut the door
+  G.teleport(px(445), 0, pz(620), 0);                                              // ...and slipped into the garage
+  ai.memory.lastSeen = new G.THREE.Vector3(px(457), 0, pz(470)); ai.memory.lastSeenT = game.time; ai.memory.vel.set(0,0,0); ai.awareness = 1.2; ai.setState('PURSUE', 'test');
   const st = ai.state;
-  // the child slams the door and slips into the garage
-  d.setOpen(false, {silent:true, by:'player'}); G.teleport(px(445), 0, pz(620), 0);
   let closed = false, reopened = false;
   const t = G.simulate(10, 1/30, () => { if (d.openness() < 0.05) closed = true; if (closed && d.openness() > 0.75) reopened = true; return reopened && ai.pos.z > d.at + 0.5; });
   return { pursuingBefore: st, doorClosed: closed, doorReopenedByAI: reopened, aiThrough: ai.pos.z > d.at + 0.5, seconds: +t.toFixed(2), aiState: ai.state };
