@@ -1,0 +1,31 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: Georgia, 'Times New Roman', serif; color: #cfc8b8; }
+canvas#game { display: block; width: 100vw; height: 100vh; }
+#hud { position: fixed; inset: 0; pointer-events: none; }
+#reticle { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: rgba(220,210,190,0.55); }
+#reticle.active { width: 8px; height: 8px; margin: -4px 0 0 -4px; background: rgba(240,230,200,0.9); }
+#prompt { position: absolute; left: 50%; top: calc(50% + 22px); transform: translateX(-50%); font-size: 15px; letter-spacing: 0.05em; color: #e6dcc6; text-shadow: 0 0 6px #000; }
+#objective { position: absolute; left: 28px; top: 22px; font-size: 14px; letter-spacing: 0.08em; color: rgba(210,200,180,0.75); text-shadow: 0 0 6px #000; transition: opacity 1s; }
+#toast { position: absolute; left: 50%; bottom: 14%; transform: translateX(-50%); max-width: 640px; text-align: center; font-size: 17px; line-height: 1.5; color: #e9e0cc; text-shadow: 0 0 8px #000, 0 0 2px #000; opacity: 0; transition: opacity 0.6s; }
+#toast.show { opacity: 1; }
+#hint { position: absolute; right: 24px; bottom: 20px; font-size: 12px; color: rgba(200,190,170,0.5); }
+#vignette { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.75) 100%); }
+#fade { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 0.4s; }
+.panel { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(560px, 90vw); max-height: 80vh; overflow: auto; background: rgba(12,11,9,0.94); border: 1px solid #3a352c; padding: 26px 30px; }
+.panel h2 { margin: 0 0 14px; font-weight: normal; letter-spacing: 0.1em; font-size: 20px; }
+.panel h3 { margin: 18px 0 6px; font-weight: normal; font-size: 14px; letter-spacing: 0.1em; color: #8f8775; }
+.panel p { white-space: pre-line; line-height: 1.6; font-size: 16px; }
+.panel ul { margin: 0; padding-left: 18px; line-height: 1.6; }
+.screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; background: rgba(0,0,0,0.88); text-align: center; }
+.screen h1 { font-weight: normal; letter-spacing: 0.35em; font-size: clamp(22px, 4vw, 44px); margin: 0 0 10px; }
+#title { background: #000; }
+button { font-family: inherit; font-size: 16px; letter-spacing: 0.2em; color: #d8cfbd; background: transparent; border: 1px solid #5c5546; padding: 10px 30px; cursor: pointer; text-transform: uppercase; }
+button:hover { background: #1c1a16; }
+.controls { font-size: 13px; line-height: 1.8; color: #8f8775; margin-top: 10px; }
+.small { font-size: 12px; color: #8f8775; }
+.warn { margin-top: 18px; color: #6e675a; }
+label.small { display: flex; gap: 10px; align-items: center; }
+.hidden { display: none !important; }
+#ending { background: #000; }
+#ending-text { font-size: 22px; max-width: 760px; line-height: 1.6; opacity: 0; transition: opacity 1.5s; padding: 0 24px; }
+#ending-text.show { opacity: 1; }
