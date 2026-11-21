@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The House Is Watching</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div id="reticle"></div>
+    <div id="prompt"></div>
+    <div id="objective"></div>
+    <div id="toast"></div>
+    <div id="hint"></div>
+  </div>
+
+  <div id="vignette"></div>
+  <div id="hidingOverlay" class="hidden"></div>
+  <div id="fade"></div>
+
+  <div id="reader" class="panel hidden">
+    <h2 id="reader-title"></h2>
+    <img id="reader-image" class="hidden" alt="" />
+    <p id="reader-body"></p>
+    <div class="small">Press E or click to close</div>
+  </div>
+
+  <div id="journal" class="panel hidden">
+    <h2>Journal</h2>
+    <h3>Carrying</h3>
+    <ul id="journal-items"></ul>
+    <h3>Found (click to read again)</h3>
+    <ul id="journal-clues"></ul>
+    <div class="small">Press J to close</div>
+  </div>
+
+  <div id="title" class="screen">
+    <h1>THE HOUSE IS WATCHING</h1>
+    <button id="start">Begin</button>
+    <div class="controls">
+      WASD move &middot; Mouse look &middot; Shift sprint &middot; C crouch<br />
+      E interact &middot; F flashlight &middot; J journal &middot; Q (hold) look behind &middot; Esc pause
+    </div>
+    <div class="small warn">Psychological horror. Contains themes of child abduction and implied violence.</div>
+  </div>
+
+  <div id="pause" class="screen hidden">
+    <h1>Paused</h1>
+    <button id="resume">Resume</button>
+    <button id="restart-checkpoint">Restart from checkpoint</button>
+    <label class="small">Mouse sensitivity <input id="sens" type="range" min="0.5" max="3" step="0.1" value="1" /></label>
+    <label class="small">Volume <input id="vol" type="range" min="0" max="1" step="0.05" value="0.8" /></label>
+  </div>
+
+  <div id="death" class="screen hidden">
+    <h1 id="death-text">He caught you.</h1>
+    <button id="retry">Try again</button>
+  </div>
+
+  <div id="ending" class="screen hidden">
+    <img id="ending-image" class="hidden" alt="" />
+    <p id="ending-text"></p>
+    <button id="again" class="hidden">Play again</button>
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
